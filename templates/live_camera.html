@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Live Camera — Geofence Monitor</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Space+Grotesk:wght@500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">Geofence <span>Monitor</span></div>
+  <nav class="tabs">
+    <a href="/live_camera" class="active">Live camera</a>
+    <a href="/dashboard">Dashboard</a>
+  </nav>
+  <button id="themeToggle" type="button">
+    🌙 Dark
+  </button>
+</header>
+
+<main>
+  <div class="panel">
+    <div class="stream-wrap" id="stream-wrap">
+      <img id="stream" src="/video_feed" alt="Live camera feed">
+      <canvas id="zone-canvas"></canvas>
+    </div>
+
+    <div class="status-row">
+      <div class="status-chip" id="chip-alert">
+        <span class="dot"></span><span id="alert-text">Checking status…</span>
+      </div>
+      <div class="status-chip">
+        <span class="dot" style="background:var(--info)"></span>
+        <span id="persons-text">Persons: —</span>
+      </div>
+      <div class="status-chip">
+        <span class="dot" style="background:var(--text-dim)"></span>
+        <span id="zone-text">Zone: —</span>
+      </div>
+    </div>
+
+    <div class="controls">
+      <button id="btn-clear" class="danger">Clear zone</button>
+    </div>
+    <p class="hint">Click and drag on the video to draw or redraw the restricted zone. It's saved automatically and reloaded next time the app starts.</p>
+  </div>
+</main>
+
+<script>
+const streamWrap = document.getElementById('stream-wrap');
+const img = document.getElementById('stream');
+const canvas = document.getElementById('zone-canvas');
+const ctx = canvas.getContext('2d');
+
+let drawing = false, startX = 0, startY = 0, currentRect = null;
+
+function resizeCanvas() {
+  canvas.width = streamWrap.clientWidth;
+  canvas.height = streamWrap.clientHeight;
+  drawRect(currentRect);
+}
+window.addEventListener('resize', resizeCanvas);
+img.addEventListener('load', resizeCanvas);
+// in case the image is already cached/loaded
+if (img.complete) resizeCanvas();
+
+function drawRect(rect) {
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  if (!rect) return;
+  ctx.strokeStyle = '#FFD60A';
+  ctx.lineWidth = 2;
+  ctx.setLineDash([6, 4]);
+  ctx.strokeRect(rect.x, rect.y, rect.w, rect.h);
+}
+
+function getPos(e) {
+  const r = canvas.getBoundingClientRect();
+  return { x: e.clientX - r.left, y: e.clientY - r.top };
+}
+
+canvas.addEventListener('mousedown', (e) => {
+  drawing = true;
+  const p = getPos(e);
+  startX = p.x; startY = p.y;
+});
+
+canvas.addEventListener('mousemove', (e) => {
+  if (!drawing) return;
+  const p = getPos(e);
+  currentRect = {
+    x: Math.min(startX, p.x), y: Math.min(startY, p.y),
+    w: Math.abs(p.x - startX), h: Math.abs(p.y - startY)
+  };
+  drawRect(currentRect);
+});
+
+window.addEventListener('mouseup', (e) => {
+  if (!drawing) return;
+  drawing = false;
+  if (!currentRect || currentRect.w < 8 || currentRect.h < 8) return;
+
+  fetch('/set_zone', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      x1: currentRect.x, y1: currentRect.y,
+      x2: currentRect.x + currentRect.w, y2: currentRect.y + currentRect.h,
+      display_width: canvas.width, display_height: canvas.height
+    })
+  }).then(r => r.json()).then(data => {
+    if (!data.ok) console.warn('Zone not set:', data.error);
+  });
+});
+
+document.getElementById('btn-clear').addEventListener('click', () => {
+  fetch('/clear_zone', { method: 'POST' }).then(() => {
+    currentRect = null;
+    drawRect(null);
+  });
+});
+
+function pollStatus() {
+  fetch('/status').then(r => r.json()).then(s => {
+    const chip = document.getElementById('chip-alert');
+    const alertText = document.getElementById('alert-text');
+    chip.classList.remove('alert', 'safe');
+    if (s.intruding) {
+      chip.classList.add('alert');
+      alertText.textContent = `Intrusion — ${s.intruders} in zone`;
+    } else {
+      chip.classList.add('safe');
+      alertText.textContent = 'Clear';
+    }
+    document.getElementById('persons-text').textContent = `Persons: ${s.persons_detected}`;
+    document.getElementById('zone-text').textContent = s.zone_set ? 'Zone: set' : 'Zone: not set';
+  }).catch(() => {});
+}
+setInterval(pollStatus, 1000);
+pollStatus();
+const toggle = document.getElementById('themeToggle');
+const root = document.documentElement;
+
+const saved = localStorage.getItem('theme') || 'dark';
+
+root.setAttribute('data-theme', saved);
+toggle.textContent = saved === 'dark' ? '🌙 Dark' : '☀️ Light';
+
+toggle.addEventListener('click', () => {
+    const current = root.getAttribute('data-theme');
+    const next = current === 'dark' ? 'light' : 'dark';
+
+    root.setAttribute('data-theme', next);
+    localStorage.setItem('theme', next);
+
+    toggle.textContent = next === 'dark' ? '🌙 Dark' : '☀️ Light';
+});
+
+</script>
+
+</body>
+</html>

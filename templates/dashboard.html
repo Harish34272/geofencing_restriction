@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Dashboard — Geofence Monitor</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Space+Grotesk:wght@500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">Geofence <span>Monitor</span></div>
+  <nav class="tabs">
+    <a href="/live_camera">Live camera</a>
+    <a href="/dashboard" class="active">Dashboard</a>
+  </nav>
+  <button id="themeToggle" type="button">
+    🌙 Dark
+  </button>
+</header>
+
+<main>
+
+  <div class="stat-row">
+    <div class="stat-card">
+      <div class="num">{{ total_intrusions }}</div>
+      <div class="label">Intrusions (last {{ total_events }} events)</div>
+    </div>
+    <div class="stat-card">
+      <div class="num">{{ total_events }}</div>
+      <div class="label">Events loaded</div>
+    </div>
+    <div class="stat-card">
+      <div class="num" style="font-size:1.3rem;">{{ last_event_time }}</div>
+      <div class="label">Last event time</div>
+    </div>
+  </div>
+
+  <div class="panel">
+    {% if rows %}
+    <table>
+      <thead>
+        <tr>
+          <th>Timestamp</th>
+          <th>Event</th>
+          <th>Bounding box</th>
+          <th>Confidence</th>
+          <th>Snapshot</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in rows %}
+        <tr>
+          <td>{{ row.timestamp }}</td>
+          <td>
+            {% if row.event_type == 'INTRUSION_DETECTED' %}
+              <span class="badge intrusion">Intrusion</span>
+            {% elif row.event_type == 'ZONE_CLEARED' %}
+              <span class="badge cleared">Cleared</span>
+            {% else %}
+              {{ row.event_type }}
+            {% endif %}
+          </td>
+          <td>{{ row.bbox }}</td>
+          <td>{{ row.confidence }}</td>
+          <td>
+            {% if row.snapshot_filename %}
+            <a href="{{ url_for('snapshots', filename=row.snapshot_filename) }}" target="_blank">
+              <img class="thumb" src="{{ url_for('snapshots', filename=row.snapshot_filename) }}" alt="snapshot">
+            </a>
+            {% else %}
+              —
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <div class="empty-state">No events logged yet. Intrusions will show up here once the camera detects one.</div>
+    {% endif %}
+  </div>
+
+</main>
+<script>
+const toggle = document.getElementById('themeToggle');
+const root = document.documentElement;
+
+const saved = localStorage.getItem('theme') || 'dark';
+
+root.setAttribute('data-theme', saved);
+toggle.textContent = saved === 'dark' ? '🌙 Dark' : '☀️ Light';
+
+toggle.addEventListener('click', () => {
+    const current = root.getAttribute('data-theme');
+    const next = current === 'dark' ? 'light' : 'dark';
+
+    root.setAttribute('data-theme', next);
+    localStorage.setItem('theme', next);
+
+    toggle.textContent = next === 'dark' ? '🌙 Dark' : '☀️ Light';
+});
+</script>
+</body>
+</html>
