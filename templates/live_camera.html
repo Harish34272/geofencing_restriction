@@ -46,6 +46,12 @@
       <button id="btn-clear" class="danger">Clear zone</button>
     </div>
     <p class="hint">Click and drag on the video to draw or redraw the restricted zone. It's saved automatically and reloaded next time the app starts.</p>
+
+    <div class="confidence-row">
+      <label for="conf-slider">Detection confidence: <span id="conf-value">0.50</span></label>
+      <input type="range" id="conf-slider" min="0.1" max="0.95" step="0.05" value="0.5">
+      <p class="hint">Lower catches more people but risks false positives; higher is stricter. Applies immediately — no restart needed.</p>
+    </div>
   </div>
 </main>
 
@@ -122,6 +128,24 @@ document.getElementById('btn-clear').addEventListener('click', () => {
   });
 });
 
+const confSlider = document.getElementById('conf-slider');
+const confValue = document.getElementById('conf-value');
+let confSynced = false;
+
+confSlider.addEventListener('input', () => {
+  confValue.textContent = parseFloat(confSlider.value).toFixed(2);
+});
+
+confSlider.addEventListener('change', () => {
+  fetch('/set_confidence', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ confidence: parseFloat(confSlider.value) })
+  }).then(r => r.json()).then(data => {
+    if (!data.ok) console.warn('Confidence not set:', data.error);
+  });
+});
+
 function pollStatus() {
   fetch('/status').then(r => r.json()).then(s => {
     const chip = document.getElementById('chip-alert');
@@ -136,6 +160,12 @@ function pollStatus() {
     }
     document.getElementById('persons-text').textContent = `Persons: ${s.persons_detected}`;
     document.getElementById('zone-text').textContent = s.zone_set ? 'Zone: set' : 'Zone: not set';
+
+    if (!confSynced && typeof s.confidence === 'number') {
+      confSlider.value = s.confidence;
+      confValue.textContent = s.confidence.toFixed(2);
+      confSynced = true;
+    }
   }).catch(() => {});
 }
 setInterval(pollStatus, 1000);

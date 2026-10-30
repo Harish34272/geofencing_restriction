@@ -26,11 +26,11 @@
   <div class="stat-row">
     <div class="stat-card">
       <div class="num">{{ total_intrusions }}</div>
-      <div class="label">Intrusions (last {{ total_events }} events)</div>
+      <div class="label">Intrusions (matching filter)</div>
     </div>
     <div class="stat-card">
       <div class="num">{{ total_events }}</div>
-      <div class="label">Events loaded</div>
+      <div class="label">Events matching filter</div>
     </div>
     <div class="stat-card">
       <div class="num" style="font-size:1.3rem;">{{ last_event_time }}</div>
@@ -38,14 +38,47 @@
     </div>
   </div>
 
+  <div class="panel" style="margin-bottom:20px;">
+    <div style="font-size:0.9rem; color:var(--text-dim); margin-bottom:10px;">Intrusions by hour of day</div>
+    <div class="hourly-chart">
+      {% for h in hourly %}
+      <div class="bar-wrap" title="{{ h.hour }}:00 — {{ h.count }} intrusion(s)">
+        <div class="bar {{ 'has-count' if h.count > 0 else '' }}" style="height: {{ h.pct if h.count > 0 else 1 }}%;"></div>
+        <div class="hour-label">{{ h.hour }}</div>
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+
   <div class="panel">
+    <form class="filter-bar" method="get" action="/dashboard">
+      <div class="field">
+        <label for="event_type">Event type</label>
+        <select name="event_type" id="event_type">
+          <option value="" {{ 'selected' if event_type == '' }}>All</option>
+          <option value="INTRUSION_DETECTED" {{ 'selected' if event_type == 'INTRUSION_DETECTED' }}>Intrusion</option>
+          <option value="ZONE_CLEARED" {{ 'selected' if event_type == 'ZONE_CLEARED' }}>Cleared</option>
+        </select>
+      </div>
+      <div class="field">
+        <label for="min_conf">Min confidence</label>
+        <input type="number" name="min_conf" id="min_conf" min="0" max="1" step="0.05"
+               value="{{ min_conf if min_conf is not none else '' }}" placeholder="any">
+      </div>
+      <button type="submit">Apply</button>
+      <div class="spacer"></div>
+      <a class="export-btn"
+         href="/dashboard/export?event_type={{ event_type }}&min_conf={{ min_conf if min_conf is not none else '' }}">
+         Export CSV
+      </a>
+    </form>
+
     {% if rows %}
     <table>
       <thead>
         <tr>
           <th>Timestamp</th>
           <th>Event</th>
-          <th>Bounding box</th>
           <th>Confidence</th>
           <th>Snapshot</th>
         </tr>
@@ -63,7 +96,6 @@
               {{ row.event_type }}
             {% endif %}
           </td>
-          <td>{{ row.bbox }}</td>
           <td>{{ row.confidence }}</td>
           <td>
             {% if row.snapshot_filename %}
@@ -78,8 +110,17 @@
         {% endfor %}
       </tbody>
     </table>
+
+    <div class="pagination">
+      <a href="/dashboard?page={{ page - 1 }}&event_type={{ event_type }}&min_conf={{ min_conf if min_conf is not none else '' }}"
+         class="{{ 'disabled' if page <= 1 }}">&larr; Prev</a>
+      <span>Page {{ page }} of {{ total_pages }}</span>
+      <a href="/dashboard?page={{ page + 1 }}&event_type={{ event_type }}&min_conf={{ min_conf if min_conf is not none else '' }}"
+         class="{{ 'disabled' if page >= total_pages }}">Next &rarr;</a>
+    </div>
+
     {% else %}
-    <div class="empty-state">No events logged yet. Intrusions will show up here once the camera detects one.</div>
+    <div class="empty-state">No events match this filter yet.</div>
     {% endif %}
   </div>
 

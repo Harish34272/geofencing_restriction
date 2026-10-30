@@ -79,3 +79,27 @@ def get_recent_events(limit: int = 20):
                 .all())
     finally:
         session.close()
+
+
+def get_filtered_events(limit: int = 200, event_type: str = None, min_confidence: float = None):
+    """
+    Fetch recent events with optional filters, newest first.
+
+    Args:
+        limit: max rows to pull before pagination is applied in the app layer
+        event_type: e.g. "INTRUSION_DETECTED" or "ZONE_CLEARED", or None for all
+        min_confidence: only events with confidence >= this value (ZONE_CLEARED
+                        rows have confidence=None and are excluded if this is set)
+    """
+    session = SessionLocal()
+    try:
+        query = session.query(IntrusionEvent)
+        if event_type:
+            query = query.filter(IntrusionEvent.event_type == event_type)
+        if min_confidence is not None:
+            query = query.filter(IntrusionEvent.confidence >= min_confidence)
+        return (query.order_by(IntrusionEvent.timestamp.desc())
+                 .limit(limit)
+                 .all())
+    finally:
+        session.close()

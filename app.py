@@ -20,10 +20,13 @@ Then open:
 
 import os
 import csv
+import io
 import json
 import time
 import threading
 from datetime import datetime
+from collections import Counter
+from math import ceil
 
 import cv2
 from flask import (
@@ -34,7 +37,7 @@ from dotenv import load_dotenv
 from ultralytics import YOLO
 from playsound import playsound
 
-from db_logger import init_db, log_event_to_db, get_recent_events
+from db_logger import init_db, log_event_to_db, get_recent_events, get_filtered_events
 
 # ─────────────────────────────────────────
 # CONFIG (mirrors restriction.py)
@@ -42,7 +45,9 @@ from db_logger import init_db, log_event_to_db, get_recent_events
 load_dotenv()
 
 CAMERA_INDEX = int(os.getenv("CAMERA_INDEX", 0))
-CONFIDENCE_THRESHOLD = 0.5
+DEFAULT_CONFIDENCE = 0.5     # starting point; adjustable live from /live_camera
+MIN_CONFIDENCE = 0.1
+MAX_CONFIDENCE = 0.95
 MODEL_PATH = "yolov8n.pt"
 PERSON_CLASS_ID = 0
 SNAPSHOT_DIR = "intrusion_snapshots"
@@ -67,6 +72,7 @@ state_lock = threading.Lock()
 latest_jpeg = None                # bytes, most recent encoded frame
 frame_size = {"width": None, "height": None}
 geofence_zone = None              # (x1, y1, x2, y2) in native frame coordinates
+detection_confidence = DEFAULT_CONFIDENCE   # read fresh each frame by camera_worker
 status = {
     "intruding": False,
     "persons_detected": 0,
@@ -74,6 +80,7 @@ status = {
     "last_event": None,
     "last_event_time": None,
     "zone_set": False,
+    "confidence": DEFAULT_CONFIDENCE,
 }
 
 
@@ -225,9 +232,10 @@ def camera_worker():
             frame_size["width"] = w
             frame_size["height"] = h
             zone = geofence_zone
+            conf_threshold = detection_confidence
 
         results = model(frame, classes=[PERSON_CLASS_ID],
-                         conf=CONFIDENCE_THRESHOLD, verbose=False)[0]
+                         conf=conf_threshold, verbose=False)[0]
 
         intruder_count = 0
         total_persons = 0
@@ -281,6 +289,7 @@ def camera_worker():
             status["persons_detected"] = total_persons
             status["intruders"] = intruder_count
             status["zone_set"] = zone is not None
+            status["confidence"] = conf_threshold
 
         # Throttle encoding/sending to STREAM_FPS_CAP
         now = time.time()
@@ -378,6 +387,24 @@ def set_zone():
     return jsonify({"ok": True, "zone": zone})
 
 
+@app.route("/set_confidence", methods=["POST"])
+def set_confidence():
+    global detection_confidence
+    data = request.get_json(force=True)
+    try:
+        value = float(data["confidence"])
+    except (KeyError, TypeError, ValueError):
+        return jsonify({"ok": False, "error": "Missing or invalid 'confidence'"}), 400
+
+    if not (MIN_CONFIDENCE <= value <= MAX_CONFIDENCE):
+        return jsonify({"ok": False,
+                         "error": f"confidence must be between {MIN_CONFIDENCE} and {MAX_CONFIDENCE}"}), 400
+
+    with state_lock:
+        detection_confidence = value
+    return jsonify({"ok": True, "confidence": value})
+
+
 @app.route("/clear_zone", methods=["POST"])
 def clear_zone():
     global geofence_zone
@@ -397,24 +424,65 @@ def get_status():
 # ─────────────────────────────────────────
 # ROUTES — DASHBOARD
 # ─────────────────────────────────────────
+DASHBOARD_FETCH_CAP = 200   # how many filtered events we pull before paginating
+PER_PAGE = 10
+
+
+def _read_dashboard_filters():
+    """Parse & validate filter/pagination query params shared by /dashboard and /dashboard/export."""
+    event_type = request.args.get("event_type") or None
+    if event_type not in (None, "INTRUSION_DETECTED", "ZONE_CLEARED"):
+        event_type = None
+
+    min_conf_raw = request.args.get("min_conf", "")
+    try:
+        min_conf = float(min_conf_raw) if min_conf_raw != "" else None
+    except ValueError:
+        min_conf = None
+
+    try:
+        page = max(1, int(request.args.get("page", 1)))
+    except ValueError:
+        page = 1
+
+    return event_type, min_conf, page
+
+
 @app.route("/dashboard")
 def dashboard():
-    events = get_recent_events(limit=40)
+    event_type, min_conf, page = _read_dashboard_filters()
+
+    events = get_filtered_events(limit=DASHBOARD_FETCH_CAP,
+                                  event_type=event_type, min_confidence=min_conf)
 
     total_intrusions = sum(1 for e in events if e.event_type == "INTRUSION_DETECTED")
     last_event_time = events[0].timestamp.strftime("%Y-%m-%d %H:%M:%S") if events else "—"
 
+    total_pages = max(1, ceil(len(events) / PER_PAGE))
+    page = min(page, total_pages)
+    page_events = events[(page - 1) * PER_PAGE: page * PER_PAGE]
+
     rows = []
-    for e in events:
+    for e in page_events:
         rows.append({
             "id": e.id,
             "timestamp": e.timestamp.strftime("%Y-%m-%d %H:%M:%S"),
             "event_type": e.event_type,
-            "bbox": e.bbox or "—",
             "confidence": f"{e.confidence:.0%}" if e.confidence is not None else "—",
             "snapshot_filename": (os.path.basename(e.snapshot_path)
                                    if e.snapshot_path else None),
         })
+
+    # Intrusions by hour-of-day, across the filtered set (not just this page)
+    hour_counts = Counter(
+        e.timestamp.hour for e in events if e.event_type == "INTRUSION_DETECTED"
+    )
+    max_hour_count = max(hour_counts.values(), default=0)
+    hourly = [{
+        "hour": f"{h:02d}",
+        "count": hour_counts.get(h, 0),
+        "pct": round((hour_counts.get(h, 0) / max_hour_count) * 100) if max_hour_count else 0,
+    } for h in range(24)]
 
     return render_template(
         "dashboard.html",
@@ -422,6 +490,37 @@ def dashboard():
         total_intrusions=total_intrusions,
         total_events=len(events),
         last_event_time=last_event_time,
+        page=page,
+        total_pages=total_pages,
+        event_type=event_type or "",
+        min_conf=min_conf,
+        hourly=hourly,
+    )
+
+
+@app.route("/dashboard/export")
+def dashboard_export():
+    event_type, min_conf, _ = _read_dashboard_filters()
+    events = get_filtered_events(limit=DASHBOARD_FETCH_CAP,
+                                  event_type=event_type, min_confidence=min_conf)
+
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(["timestamp", "event_type", "bbox", "confidence", "snapshot_path"])
+    for e in events:
+        writer.writerow([
+            e.timestamp.strftime("%Y-%m-%d %H:%M:%S"),
+            e.event_type,
+            e.bbox or "",
+            f"{e.confidence:.4f}" if e.confidence is not None else "",
+            e.snapshot_path or "",
+        ])
+
+    filename = f"geofence_events_{datetime.now():%Y%m%d_%H%M%S}.csv"
+    return Response(
+        buf.getvalue(),
+        mimetype="text/csv",
+        headers={"Content-Disposition": f"attachment; filename={filename}"},
     )
 
 

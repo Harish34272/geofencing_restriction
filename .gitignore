@@ -1,5 +1,5 @@
 .env
 __pycache__/*
 zone_state.json
-geofencing_log.csv
+geofence_log.csv
 intrusion_snapshots
